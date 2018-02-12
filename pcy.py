@@ -1,21 +1,27 @@
 import datetime
+import my_hashmap as hm
 from collections import defaultdict
 
 DEBUG = True
-REMOVE_INFREQUENT_ITEMS = True
 
 def a_priori(input_file, num_baskets, support_threshold):
     min_required_occurrences = num_baskets * support_threshold
+    if DEBUG:
+        print("Minimum number of occurrences to be considered frequent: {}".format(min_required_occurrences))
 
     # -- Pass 1 --
     # Any frequent pairs would have to contain items that would be also considered frequent
     # Therefore, we can go through the baskets and eliminate all items which are not considered "frequent"
     # No frequent pairs would contain items which are not frequent
+    if DEBUG:
+        print("Starting pass 1...")
 
     # Our hashmap/dict of possibly frequent items
     # Default value of any basket will always be 0
     global key_pair
     items = defaultdict(lambda: 0)
+    hashed_pairs = hm.my_hashmap(num_buckets=int(num_baskets / 2))
+
     with open(input_file, 'r') as fp:
         # Reading up to $num_basket baskets
         for basket_index in range(num_baskets):
@@ -27,30 +33,44 @@ def a_priori(input_file, num_baskets, support_threshold):
             for i in tmp_items:
                 items[i] += 1
 
+            # Hashing each pair of items to our hashmap of pairs.
+            # Note that each bucket of this hashmap correlates to one or more pairs.
+            for a in range(len(tmp_items) - 1):
+                for b in range(a + 1, len(tmp_items)):
+                    hashed_pairs.increment_count(a, b)
+
     if DEBUG:
         print("Number of unique items: {}".format(len(items)))
 
-    # Since we cannot have a frequent pair that consists of infrequent items, we can toss out any items which aren't
-    # frequent. Not sure if this is necessary, which is why it's toggleable.
-    if REMOVE_INFREQUENT_ITEMS:
-        to_remove = []
-        for i in items:
-            if items[i] < min_required_occurrences:
-                to_remove.append(i)
+    # -- Between Passes --
+    # Replacing our buckets of pairs with a bitvector
+    # In other words, a bucket is considered frequent if the count for that bucket exceeds our support threshold.
+    # In this function, we clear our reference to the hashmap, so it's not unlikely that GC will run here or soon after
+    if DEBUG:
+        print("Pass 1 complete. Inbetween passes...")
+    hashed_pairs.convert_to_bitmap(min_required_occurrences)
 
-        for i in to_remove:
-            items.pop(i)
+    # Now that we have a hashmap of items, and their counts, we can toss out items which are NOT frequent
+    to_remove = []
+    for item_index in items:
+        if items[item_index] < min_required_occurrences:
+            # Making a list of item indicies we can toss
+            # Python doesn't like you modifying the length of collections while iterating over them,
+            # which is why we're doing this in two steps.
+            to_remove.append(item_index)
 
-        if DEBUG:
-            print("Removed {} infrequent items.".format(len(to_remove)))
-            print("Number of unique, frequent items: {}".format(len(items)))
+    for item_index in to_remove:
+        items.pop(item_index)
+
+    if DEBUG:
+        print("Number of unique, frequent items: {}".format(len(items)))
 
     # -- Pass 2 --
     # Now that we have the list of items which are frequent, we can find each combination of items,
     # where both of the items in the pair are frequent. Therefore, through monotonicity, that pair would be frequent.
-    frequent_pairs = defaultdict(lambda: 0)
     if DEBUG:
-        print("Minimum number of occurrences to be considered frequent: {}".format(min_required_occurrences))
+        print("Starting pass 2...")
+    frequent_pairs = defaultdict(lambda: 0)
 
     with open(input_file, 'r') as fp:
         # Reading up to $num_basket baskets
@@ -65,7 +85,9 @@ def a_priori(input_file, num_baskets, support_threshold):
                 for b in range(a + 1, len(tmp_items)):
                     # Making sure both items are frequent
                     if items[tmp_items[a]] > min_required_occurrences and items[tmp_items[b]] > min_required_occurrences:
-                        frequent_pairs[(a, b)] += 1
+                        # Making sure the pair of items hash to a frequent bucket
+                        if hashed_pairs.get_from_bitmap(a, b):
+                            frequent_pairs[(a, b)] += 1
 
     # -- Verification --
     # Now that we have a list of "frequent pairs", in which both of its items are frequent, we need to verify that
